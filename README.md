@@ -10,8 +10,11 @@ with the stock it accounts for.
 
 | | URL |
 |---|---|
-| API | `<BACKEND_URL>` — `GET /` and `/health` are unauthenticated |
-| Console | `<FRONTEND_URL>` |
+| API | <https://northwind-erp-api.onrender.com> — `GET /` and `/health` need no token |
+| Console | <https://northwind-erp-console.onrender.com> |
+
+Both are Render free tier, so the API sleeps after 15 minutes idle and takes
+about 50 seconds to wake on the first request. That is the platform, not the app.
 
 Sign in with a demo token: `demo-kabir` (warehouse clerk), `demo-nina` (sales),
 `demo-tara` (accountant), `demo-ravi` (buyer), `demo-meera` (purchasing manager),
