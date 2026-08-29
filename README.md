@@ -96,10 +96,10 @@ when the read happens, two concurrent confirms cannot both observe the same
 pre-image. The loser sees the winner's reservation and gets `409
 INSUFFICIENT_STOCK` — a business answer, not a crash.
 
-`proofs.py` fires 8 concurrent confirms at a single unit of stock and asserts
-exactly one winner. It also prints the server's own **peak in-flight request
-counter**, because a sequential run would produce the same 1-winner result and
-prove nothing:
+`proofs.py` fires 20 concurrent confirms at a single unit of stock and asserts
+exactly one winner (`regression.py` repeats it with 8). Both print the server's
+own **peak in-flight request counter**, because a sequential run would produce
+the same 1-winner result and prove nothing:
 
 ```
 20 concurrent confirms vs 1 unit -> 200x1 409x19 | peak in-flight 20 (overlapped)
