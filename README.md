@@ -187,13 +187,33 @@ Render, from this repository, via `render.yaml` as a Blueprint:
    - **northwind-erp-console** — static site from `frontend/`, served at the
      root as `index.html`, with `config.js` choosing its API by hostname.
 
-Four things had to change for a platform deploy, all small and all in the repo:
-binding `0.0.0.0:$PORT` instead of `127.0.0.1:8080`; an unauthenticated `GET /`
-and `/health`, because a health probe and a reviewer both arrive before they have
-a token; and CORS with a `204 OPTIONS` preflight, since the console is served
-from a different origin and sends `Authorization` on POSTs. And the entry file
-is `index.html`, because a static host serves the root, not `console.html` —
-the first deploy 404ed at `/` for exactly that reason.
+Five things had to change in the application for a platform deploy, all small,
+all in the repo, and every one of them found by a failure rather than foreseen:
+
+1. **Bind `0.0.0.0:$PORT`**, not `127.0.0.1:8080`. `serve()` takes a host, and
+   `__main__` reads `PORT` and `HOST` from the environment.
+2. **An unauthenticated door, exactly two GET paths wide.** A health probe and a
+   reviewer both arrive before they have a token. `GET /` and `/health` return
+   the service descriptor and a live `COUNT(*)` over `products` — the count is
+   deliberate, so a container that booted with an unseeded database fails its
+   health check instead of being marked healthy while broken. Everything else
+   still `401`s.
+3. **`DB_PATH` from the environment.** `docker-compose.yml` mounted a volume and
+   set `ERP_DB`, but `erp.py` had the path hard-coded, so the container wrote to
+   its own `/tmp` and the volume held nothing. Dead config that looks like a
+   feature is worse than no config, because the next person trusts it.
+4. **`ERP_DEMO=1` for predictable tokens.** Random hex printed into a platform
+   log makes a public demo unusable. Gated behind an env var, off by default,
+   because predictable bearer tokens must never be what ships by accident.
+5. **A bind failure is a message, not a traceback.** Found by cloning the repo
+   onto a machine where 8080 was already taken: it now names the port, the
+   override command, and how to point the console at it.
+
+Two things were already right and mattered here: CORS with a `204 OPTIONS`
+preflight, because the console is a different origin and sends `Authorization`;
+and the entry file being `index.html` — a static host serves the root and
+nothing else, which the first deploy proved by 404ing at `/` while every asset
+under it returned 200.
 
 ## Verification
 
