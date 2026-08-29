@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Northwind Operations Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { margin:0; background:#0f1115; color:#e6e9ef; font:14px/1.5 ui-monospace,Menlo,monospace; }
+  * { box-sizing:border-box; }
+  nav { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px 16px;
+        background:#171a21; border-bottom:1px solid #262b36; position:sticky; top:0; }
+  nav .who { margin-right:auto; }
+  button { background:#21262d; color:inherit; border:1px solid #262b36; border-radius:6px;
+           padding:6px 10px; cursor:pointer; font:inherit; }
+  button.active { background:#58a6ff; color:#0d1117; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  section { margin-bottom:26px; }
+  h2 { font-size:14px; text-transform:uppercase; color:#8b93a3;
+       border-bottom:1px solid #262b36; padding-bottom:6px; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid #262b36; }
+  th { color:#8b93a3; font-weight:500; }
+  .card { background:#171a21; border:1px solid #262b36; border-radius:8px;
+          padding:10px 12px; margin:10px 0; }
+  .card header { display:flex; gap:10px; flex-wrap:wrap; }
+  .badge { border:1px solid #262b36; border-radius:999px; padding:1px 9px; font-size:12px; }
+  .hint { color:#8b93a3; font-size:12px; }
+  .ok, .in { color:#3fb950; } .zero, .out { color:#f85149; }
+  .state { padding:10px 12px; border:1px dashed #262b36; border-radius:8px; color:#8b93a3; }
+  .state.error { border:1px solid #f85149; color:#f85149; }
+  .state.forbidden { border-color:#d29922; color:#d29922; }
+  .recon, .live, .notice { padding:10px 12px; border-radius:8px; border:1px solid #58a6ff; }
+  .recon { border-color:#3fb950; color:#3fb950; }
+  .recon.bad { border-color:#f85149; color:#f85149; }
+  form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+  input, select { background:#0d1117; color:inherit; border:1px solid #262b36;
+                  border-radius:6px; padding:6px 8px; font:inherit; }
+  .signin { max-width:520px; margin-top:12vh; }
+  code { color:#58a6ff; }
+</style>
+<div id="root"></div>
+<script src="./config.js"></script>
+<script type="module" src="./app.js"></script>

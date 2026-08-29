@@ -1,0 +1,30 @@
+# Render Blueprint: creates both services from this repo in one action.
+# Render dashboard -> New -> Blueprint -> pick this repo -> Apply.
+services:
+  - type: web
+    name: northwind-erp-api
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: ERP_DEMO
+        value: "1"
+
+  - type: web
+    name: northwind-erp-console
+    runtime: static
+    plan: free
+    rootDir: frontend
+    staticPublishPath: .
+    buildCommand: >-
+      sed -i "s#http://127.0.0.1:8080#https://$API_URL#" config.js
+    envVars:
+      - key: API_URL
+        fromService:
+          name: northwind-erp-api
+          type: web
+          property: host   # hostname only, so the https:// above is required
