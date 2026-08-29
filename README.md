@@ -40,6 +40,11 @@ cd frontend && python3 -m http.server 5173           # console on :5173
 Python 3.10+ and the standard library only. There are no dependencies to install
 in either service, which is why there is no lockfile to go stale.
 
+Nothing is fixed to those port numbers. If 8080 or 5173 is taken on your machine,
+run `PORT=8090 ERP_DEMO=1 python3 server.py` and open the console with
+`?api=http://127.0.0.1:8090`; for Compose, change the left-hand side of the
+`ports:` mapping. The backend prints exactly this if the bind fails.
+
 To point the console at a different API without rebuilding:
 `console.html?api=https://your-api.example.com`.
 

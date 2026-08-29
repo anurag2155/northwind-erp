@@ -204,7 +204,16 @@ if __name__ == "__main__":
   port = int(os.environ.get("PORT", "8080"))
   host = os.environ.get("HOST", "127.0.0.1")
   creds = reset_database()
-  httpd, port = serve(port, host)
+  try:
+    httpd, port = serve(port, host)
+  except OSError as err:
+    # A raw traceback here is the difference between a reviewer running this in
+    # one minute and giving up, so say what to do about it.
+    raise SystemExit("Cannot bind %s:%s (%s).\nAnother process is probably using "
+                     "that port. Re-run on a different one, e.g.\n"
+                     "    PORT=8090 ERP_DEMO=1 python3 server.py\n"
+                     "then open the console with ?api=http://127.0.0.1:8090"
+                     % (host, port, err.strerror))
   print("mini-erp listening on http://%s:%d" % (host, port))
   for name, token in creds.items():
     print("  %-8s %s" % (name, token))
