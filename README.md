@@ -26,7 +26,7 @@ docker compose up --build
 
 That is the whole thing. It builds both images, seeds the database on boot, waits
 for the API's health check before starting the console, and leaves you at
-<http://localhost:5173/console.html> talking to <http://localhost:8080>. Sign in
+<http://localhost:5173> talking to <http://localhost:8080>. Sign in
 with any token above. No `.env` to write, no migration to run, no seed script to
 remember — seeding happens in `server.reset_database()` at startup.
 
@@ -46,7 +46,7 @@ run `PORT=8090 ERP_DEMO=1 python3 server.py` and open the console with
 `ports:` mapping. The backend prints exactly this if the bind fails.
 
 To point the console at a different API without rebuilding:
-`console.html?api=https://your-api.example.com`.
+`?api=https://your-api.example.com` on the console URL.
 
 ## Architecture
 
@@ -54,7 +54,7 @@ Four stages, four artefacts, one system:
 
 ```
 frontend/                      backend/
-  console.html  shell            server.py     transport: auth, routing, RBAC, CORS
+  index.html    shell            server.py     transport: auth, routing, RBAC, CORS
   config.js     API base         readmodel.py  read-only projections for the console
   api.js        transport        erp.py        schema + every business rule
   store.js      state                            Ledger / Inventory / Procurement
@@ -181,15 +181,16 @@ Render, from this repository, via `render.yaml` as a Blueprint:
    - **northwind-erp-api** — Docker, `backend/Dockerfile`, health check on
      `/health`, `HOST=0.0.0.0` so it binds where the platform expects and
      `PORT` injected by Render.
-   - **northwind-erp-console** — static site from `frontend/`, whose build step
-     rewrites `config.js` with the API's live hostname, so the console ships
-     already pointing at its own backend.
+   - **northwind-erp-console** — static site from `frontend/`, served at the
+     root as `index.html`, with `config.js` choosing its API by hostname.
 
-Three things had to change for a platform deploy, all small and all in the repo:
+Four things had to change for a platform deploy, all small and all in the repo:
 binding `0.0.0.0:$PORT` instead of `127.0.0.1:8080`; an unauthenticated `GET /`
 and `/health`, because a health probe and a reviewer both arrive before they have
 a token; and CORS with a `204 OPTIONS` preflight, since the console is served
-from a different origin and sends `Authorization` on POSTs.
+from a different origin and sends `Authorization` on POSTs. And the entry file
+is `index.html`, because a static host serves the root, not `console.html` —
+the first deploy 404ed at `/` for exactly that reason.
 
 ## Verification
 

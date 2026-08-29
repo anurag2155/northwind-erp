@@ -1,6 +1,6 @@
 # One command brings the whole stack up, seeded and ready:
 #     docker compose up --build
-# then open http://localhost:5173/console.html and sign in with `demo-kabir`
+# then open http://localhost:5173 and sign in with `demo-kabir`
 # (warehouse clerk), `demo-nina` (sales), `demo-tara` (accountant), and so on.
 services:
   backend:
