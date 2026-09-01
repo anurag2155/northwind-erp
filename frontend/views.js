@@ -133,13 +133,21 @@ export function renderFinance(s) {
   else if (s.errors.recon) ind = errorBox(s.errors.recon);
   else if (s.loading.recon || !r) ind = `<p class="state loading">Loading reconciliation…</p>`;
   else {
-    const [i1, i2, i3] = [r.I1_gl_vs_movements, r.I2_position_vs_movements, r.I3_entries_balanced];
+    const i1 = r.I1_gl_vs_movements, i2 = r.I2_position_vs_movements;
+    const i3 = r.I3_entries_balanced, i4 = r.I4_po_received_vs_movements;
+    // Every invariant the endpoint reports gets a row. The table is built from
+    // the four the API is known to return rather than from Object.keys, so a
+    // renamed key shows up as a missing row in the console evidence run instead
+    // of silently vanishing -- but a NEW invariant must be added here too, and
+    // I4 was added in exactly this pass after the backend gained it.
     ind = `<p class="recon ${r.ok ? "ok" : "bad"}"><strong>Ledger balance matches inventory ` +
       `movements: ${r.ok ? "YES" : "NO"}</strong></p>` + table(["Invariant", "Result", "Detail"], [
         ["I1 GL 1300 vs movement value", flag(i1.ok), `${money(i1.gl_inventory_cents)} vs ` +
           `${money(i1.movement_value_cents)}, delta ${money(i1.delta_cents)}`],
         ["I2 position vs movements", flag(i2.ok), `${i2.drifted.length} drifted`],
-        ["I3 entries balanced", flag(i3.ok), `${i3.unbalanced_entries.length} unbalanced`]]);
+        ["I3 entries balanced", flag(i3.ok), `${i3.unbalanced_entries.length} unbalanced`],
+        ["I4 PO received vs movements", flag(i4.ok),
+          `${i4.miscounted_lines.length} miscounted lines`]]);
   }
   const ledger = cardPanel(s, "journals", "journal entries", "/ledger/journals", (e) =>
     card(e.id, e.source, `${money(e.total_cents)} · ${e.posted_by} · ${e.posted_at}` +

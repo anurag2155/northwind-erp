@@ -130,10 +130,12 @@ class Ledger:
     if debits != credits:
       raise ApiError(500, "UNBALANCED_JOURNAL", debits=debits, credits=credits)
     eid, at = _id(), time.strftime("%Y-%m-%dT%H:%M:%S")
-    conn.execute("INSERT INTO journal_entries VALUES (?,?,?,?,?,?)",
+    conn.execute("INSERT INTO journal_entries (id, source, source_id, reverses_id, "
+                 "posted_by, posted_at) VALUES (?,?,?,?,?,?)",
                  (eid, source, source_id, reverses_id, user_id, at))
     for account, debit, credit in lines:
-      conn.execute("INSERT INTO journal_lines VALUES (?,?,?,?,?)", (_id(), eid, account, debit, credit))
+      conn.execute("INSERT INTO journal_lines (id, entry_id, account, debit_cents, "
+                   "credit_cents) VALUES (?,?,?,?,?)", (_id(), eid, account, debit, credit))
     return eid
 
   @staticmethod
@@ -183,13 +185,38 @@ class Inventory:                          # the only writer of positions/movemen
             "unit_cost_cents": int(value / on_hand) if on_hand else 0}
 
   @staticmethod
+  def _move(conn, row, kind, qty, value, journal_id, ref, reserved_delta=0.0):
+    """Move stock and value in or out of ONE position and append the movement.
+
+    Stage 4 wrote the transfer feature and found it could not reuse `issue`,
+    because `issue` meant both "stock leaves this position" and "a reservation
+    is being fulfilled". This is the first of those two, alone: `qty` and
+    `value` are signed, positive moves in, negative moves out, and it knows
+    nothing about reservations, unit costs or documents. `receive` layers
+    pricing on top, `issue` layers the reservation rule, `transfer` is two
+    calls with opposite signs.
+
+    `reserved_delta` is a parameter rather than a separate call because
+    `_commit` is a compare-and-swap on `version`: one row can only be written
+    once per transaction, so releasing a reservation has to travel with the
+    stock movement that fulfils it. The *rule* about when that is legal is the
+    caller's business, which is the part that was tangled before.
+    """
+    Inventory._commit(conn, row, float(row["on_hand"]) + qty,
+                      float(row["reserved"]) + reserved_delta,
+                      int(row["value_cents"]) + value)
+    # Named columns. A Stage 2 column reorder broke a positional insert here,
+    # and Stage 4 still counted eight placeholders by hand to add the transfer
+    # rows -- adding a feature is where that cost is actually paid.
+    conn.execute("INSERT INTO stock_movements (id, sku, warehouse_id, kind, qty, "
+                 "value_cents, journal_id, ref) VALUES (?,?,?,?,?,?,?,?)",
+                 (_id(), row["sku"], row["warehouse_id"], kind, qty, value, journal_id, ref))
+
+  @staticmethod
   def receive(conn, sku, wh, qty, unit_cost_cents, journal_id, ref):
     row = Inventory._row(conn, sku, wh, create=True)
     value = int(round(qty * unit_cost_cents))
-    Inventory._commit(conn, row, float(row["on_hand"]) + qty, float(row["reserved"]),
-                      int(row["value_cents"]) + value)
-    conn.execute("INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?)",
-                 (_id(), sku, wh, "receipt", qty, value, journal_id, ref))
+    Inventory._move(conn, row, "receipt", qty, value, journal_id, ref)
     return value
 
   @staticmethod
@@ -203,15 +230,19 @@ class Inventory:                          # the only writer of positions/movemen
 
   @staticmethod
   def issue(conn, sku, wh, qty, value, journal_id, ref):
+    """Fulfil a reservation: `_move` out, plus the rule that it must be reserved.
+
+    That rule is the whole of what `issue` adds over `_move`, which is why a
+    transfer -- which reserves nothing -- goes straight to `_move` instead of
+    being forced through here.
+    """
     # `value` comes from the caller, which prices a shipment line by line.
     # Recomputing here let two lines on one SKU take the same pre-issue value.
     row = Inventory._row(conn, sku, wh)
     on_hand, reserved = float(row["on_hand"]), float(row["reserved"])
     if qty > on_hand + EPS or qty > reserved + EPS:
       raise ApiError(409, "NOT_RESERVED", sku=sku, reserved=reserved)
-    Inventory._commit(conn, row, on_hand - qty, reserved - qty, int(row["value_cents"]) - value)
-    conn.execute("INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?)",
-                 (_id(), sku, wh, "issue", -qty, -value, journal_id, ref))
+    Inventory._move(conn, row, "issue", -qty, -value, journal_id, ref, reserved_delta=-qty)
     return value
 
 
@@ -249,14 +280,12 @@ class Inventory:                          # the only writer of positions/movemen
                      available=on_hand - reserved)
     value = int(round(int(out["value_cents"]) * qty / on_hand)) if on_hand else 0
     journal_id = Ledger.post(conn, "transfer", f"{src}->{dst}", user["id"], [])
-    Inventory._commit(conn, out, on_hand - qty, reserved, int(out["value_cents"]) - value)
-    conn.execute("INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?)",
-                 (_id(), sku, src, "issue", -qty, -value, journal_id, f"transfer:{dst}"))
+    # Two _move calls with opposite signs. Stage 4 hand-wrote both sides of this
+    # against the raw tables; now the pair is visibly a pair, and neither side
+    # can drift from how receipts and issues maintain a position.
+    Inventory._move(conn, out, "issue", -qty, -value, journal_id, f"transfer:{dst}")
     into = Inventory._row(conn, sku, dst, create=True)
-    Inventory._commit(conn, into, float(into["on_hand"]) + qty, float(into["reserved"]),
-                      int(into["value_cents"]) + value)
-    conn.execute("INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?)",
-                 (_id(), sku, dst, "receipt", qty, value, journal_id, f"transfer:{src}"))
+    Inventory._move(conn, into, "receipt", qty, value, journal_id, f"transfer:{src}")
     return {"sku": sku, "from_warehouse_id": src, "to_warehouse_id": dst, "qty": qty,
             "value_cents": value, "journal_id": journal_id}
 
@@ -269,12 +298,14 @@ class Procurement:
       raise ApiError(400, "NO_LINES")
     po_id, out = _id(), []
     amount = sum(int(round(l["qty"] * l["unit_cost_cents"])) for l in lines)
-    conn.execute("INSERT INTO purchase_orders VALUES (?,?,?,?,?,?,?)",
+    conn.execute("INSERT INTO purchase_orders (id, status, warehouse_id, created_by, "
+                 "approved_by, amount_cents, over_tolerance) VALUES (?,?,?,?,?,?,?)",
                  (po_id, "submitted", body["warehouse_id"], user["id"], None,
                   amount, float(body.get("over_tolerance", 0))))
     for l in lines:
       lid = _id()
-      conn.execute("INSERT INTO po_lines VALUES (?,?,?,?,0,?)",
+      conn.execute("INSERT INTO po_lines (id, po_id, sku, qty_ordered, qty_received, "
+                   "unit_cost_cents) VALUES (?,?,?,?,0,?)",
                    (lid, po_id, l["sku"], float(l["qty"]), int(l["unit_cost_cents"])))
       out.append(_line_out(lid, l))
     return {"id": po_id, "status": "submitted", "amount_cents": amount, "lines": out}
@@ -341,11 +372,14 @@ class Sales:
     if not lines:
       raise ApiError(400, "NO_LINES")
     so_id, out = _id(), []
-    conn.execute("INSERT INTO sales_orders VALUES (?,?,?,?)",
+    conn.execute("INSERT INTO sales_orders (id, status, warehouse_id, created_by) "
+                 "VALUES (?,?,?,?)",
                  (so_id, "draft", body["warehouse_id"], user["id"]))
     for l in lines:
       lid = _id()
-      conn.execute("INSERT INTO so_lines VALUES (?,?,?,?,0,0,0,?)",
+      conn.execute("INSERT INTO so_lines (id, so_id, sku, qty_ordered, qty_reserved, "
+                   "qty_shipped, qty_backordered, unit_price_cents) "
+                   "VALUES (?,?,?,?,0,0,0,?)",
                    (lid, so_id, l["sku"], float(l["qty"]), int(l["unit_price_cents"])))
       out.append(_line_out(lid, l))
     return {"id": so_id, "status": "draft", "lines": out}
@@ -419,8 +453,17 @@ class Sales:
 class Reports:
   @staticmethod
   def reconcile(conn):
-    """I1 ledger vs sub-ledger, I2 position vs movements, I3 entries balanced.
-    Separate flags, because one would hide which invariant broke."""
+    """I1 ledger vs sub-ledger, I2 position vs movements, I3 entries balanced,
+    I4 PO receipt ledger vs movements. Separate flags, because one would hide
+    which invariant broke.
+
+    I4 exists because of Stage 4's Bug 2, which added an absolute quantity where
+    a delta belonged: a second partial receipt left `qty_received` at 16 for 10
+    units actually received, and I1, I2 and I3 all stayed green -- movements are
+    driven by the received qty and never read the column. The invariant set tied
+    the general ledger to the stock sub-ledger and left the purchase-order
+    ledger unchecked. Diagnosing that in a write-up did not close it; this does.
+    """
     gl = Ledger.balance(conn, ACC_INVENTORY)
     moved = int(one(conn, "SELECT COALESCE(SUM(value_cents),0) AS v FROM stock_movements")["v"])
     drifted = [{"sku": r["sku"], "wh": r["warehouse_id"],
@@ -437,8 +480,23 @@ class Reports:
     unbalanced = [r["entry_id"] for r in conn.execute(
         "SELECT entry_id FROM journal_lines GROUP BY entry_id "
         "HAVING SUM(debit_cents) <> SUM(credit_cents)")]
+    # I4: a receipt movement carries the po_line id as its `ref`, so the join is
+    # exact rather than heuristic. A line with no receipts yet must be 0, which
+    # is why this is a LEFT JOIN over every line and not a join over movements.
+    miscounted = [{"po_line_id": r["id"], "po_id": r["po_id"], "sku": r["sku"],
+                   "qty_received": float(r["qty_received"]),
+                   "movement_qty": float(r["mq"])}
+                  for r in conn.execute(
+                      "SELECT l.id, l.po_id, l.sku, l.qty_received, COALESCE(m.q, 0) AS mq "
+                      "FROM po_lines l LEFT JOIN "
+                      "(SELECT ref, SUM(qty) AS q FROM stock_movements "
+                      "WHERE kind = 'receipt' GROUP BY ref) m ON m.ref = l.id")
+                  if abs(float(r["qty_received"]) - float(r["mq"])) > EPS]
+    ok = gl == moved and not drifted and not unbalanced and not miscounted
     return {"I1_gl_vs_movements": {"gl_inventory_cents": gl, "movement_value_cents": moved,
                                    "delta_cents": gl - moved, "ok": gl == moved},
             "I2_position_vs_movements": {"drifted": drifted, "ok": not drifted},
             "I3_entries_balanced": {"unbalanced_entries": unbalanced, "ok": not unbalanced},
-            "ok": gl == moved and not drifted and not unbalanced}
+            "I4_po_received_vs_movements": {"miscounted_lines": miscounted,
+                                            "ok": not miscounted},
+            "ok": ok}

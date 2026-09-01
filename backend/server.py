@@ -31,30 +31,8 @@ def reset_database():
   finally:
     conn.close()
 
-# (method, path, roles, status, handler(conn, user, params, body)).
-ROUTES = [
-    ("POST", "/purchase-orders", {"buyer"}, 201, lambda c,u,p,b: erp.Procurement.create_po(c, u, b)),
-    ("POST", "/purchase-orders/{po_id}/approve", {"purchasing_manager"}, 200,
-     lambda c,u,p,b: erp.Procurement.approve_po(c, u, p["po_id"])),
-    ("POST", "/purchase-orders/{po_id}/receipts", {"warehouse_clerk"}, 201,
-     lambda c,u,p,b: erp.Procurement.receive(c, u, p["po_id"], b)),
-    ("POST", "/sales-orders", {"sales_rep"}, 201, lambda c,u,p,b: erp.Sales.create_so(c, u, b)),
-    ("POST", "/sales-orders/{so_id}/confirm", {"sales_rep"}, 200,
-     lambda c,u,p,b: erp.Sales.confirm_so(c, u, p["so_id"], b)),
-    ("POST", "/sales-orders/{so_id}/shipments", {"warehouse_shipper"}, 201,
-     lambda c,u,p,b: erp.Sales.ship_so(c, u, p["so_id"], b)),
-    ("POST", "/ledger/journals/{journal_id}/reverse", {"accountant"}, 201,
-     lambda c,u,p,b: erp.Ledger.reverse(c, p["journal_id"], u["id"], (b or {}).get("reason"))),
-    ("GET", "/ledger/inventory-reconciliation", {"accountant"}, 200,
-     lambda c,u,p,b: erp.Reports.reconcile(c)),
-    ("POST", "/inventory/transfers", {"warehouse_clerk"}, 201,
-     lambda c,u,p,b: erp.Inventory.transfer(c, u, b)),
-    ("GET", "/inventory/skus/{sku}/availability", set(), 200,
-     lambda c,u,p,b: erp.Inventory.snapshot(c, p["sku"], (b or {}).get("warehouse_id") or "WH-MAIN")),
-]
-
-import readmodel                      # Stage 3 read-only projections
-ROUTES += readmodel.ROUTES
+import routes                       # the single route table
+ROUTES = routes.ROUTES              # re-exported: proofs.py and evidence.mjs read it
 
 
 def _match(spec, segments):
@@ -84,7 +62,7 @@ def authenticate(header):
 
 def dispatch(user, method, path, body):   # unknown path 404; wrong role 403
   segments = [s for s in path.split("/") if s]
-  for r_method, spec, roles, status, handler in ROUTES:
+  for r_method, spec, roles, status, handler in routes.ROUTES:
     if r_method != method:
       continue
     params = _match(spec, segments)

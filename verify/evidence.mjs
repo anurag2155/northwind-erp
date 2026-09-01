@@ -144,7 +144,12 @@ const main = async () => {
   await loadTab(acct.state, acct.api, "finance");
   const fin = text(renderFinance(acct.state));
   check("e5.indicator", /Ledger balance matches inventory movements: YES/.test(fin), fin.slice(0, 300));
-  show("E5 Finance (rendered)", fin.split("\n").slice(0, 5).join("\n"));
+  // Every invariant the API reports must reach the screen. Without this the
+  // console could quietly drop one -- which is what happened when the backend
+  // gained I4 and this view still listed three rows.
+  const shown = ["I1", "I2", "I3", "I4"].filter((i) => fin.includes(`${i} `));
+  check("e5.all_invariants_rendered", shown.length === 4, shown);
+  show("E5 Finance (rendered)", fin.split("\n").slice(0, 6).join("\n"));
 
   // E6 a cold load reflects true state; E7 empty
   const fresh = await session(base, tokens.kabir, "warehouse");

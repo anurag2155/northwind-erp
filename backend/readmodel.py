@@ -1,12 +1,10 @@
-"""Stage 3 read model: read-only projections the console needs; no business rule
-lives here. `GET /me` is the important one -- it derives the caller's permitted
-routes from server.ROUTES, so the UI keeps no second copy of the RBAC table.
+"""Read-only projections the console needs. No business rule and no route table.
 
-Wired by one line in server.py: `import readmodel; ROUTES += readmodel.ROUTES`
+Stage 4 flagged that this module had to `import server` inside `me()` to read
+the live route table, a circularity accepted at the time. The table now lives in
+routes.py and `me()` takes it as an argument, so this module imports nothing
+from the transport layer at all.
 """
-ANY = set()                    # authenticated, not role-gated
-PO_ROLES = {"buyer", "purchasing_manager", "warehouse_clerk"}
-SO_ROLES = {"sales_rep", "warehouse_shipper"}
 
 
 def _rows(conn, sql, *args):
@@ -23,10 +21,13 @@ def _attach(parents, lines, fk, project):
   return parents
 
 
-def me(conn, user):
-  """Identity plus the routes this role may call, off the live route table."""
-  import server
-  allowed = [{"method": m, "path": p} for m, p, roles, _s, _h in server.ROUTES
+def me(conn, user, route_table):
+  """Identity plus the routes this role may call, off the live route table.
+
+  Passed in rather than imported: this is the single source of truth for what
+  the console may show, and it must be the same table the server enforces.
+  """
+  allowed = [{"method": m, "path": p} for m, p, roles, _s, _h in route_table
              if not roles or user["role"] in roles]
   return {"id": user["id"], "role": user["role"], "permissions": allowed}
 
@@ -93,12 +94,3 @@ def journals(conn, query):
   for e in entries:
     e["total_cents"] = sum(x["debit_cents"] for x in e["lines"])
   return {"journals": entries}
-
-
-ROUTES = [
-    ("GET", "/me", ANY, 200, lambda c, u, p, b: me(c, u)),
-    ("GET", "/inventory/positions", ANY, 200, lambda c, u, p, b: positions(c)),
-    ("GET", "/inventory/movements", ANY, 200, lambda c, u, p, b: movements(c, b or {})),
-    ("GET", "/purchase-orders", PO_ROLES, 200, lambda c, u, p, b: purchase_orders(c)),
-    ("GET", "/sales-orders", SO_ROLES, 200, lambda c, u, p, b: sales_orders(c)),
-    ("GET", "/ledger/journals", {"accountant"}, 200, lambda c, u, p, b: journals(c, b or {}))]
