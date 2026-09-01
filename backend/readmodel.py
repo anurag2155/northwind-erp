@@ -28,7 +28,7 @@ def me(conn, user, route_table):
   the console may show, and it must be the same table the server enforces.
   """
   allowed = [{"method": m, "path": p} for m, p, roles, _s, _h in route_table
-             if not roles or user["role"] in roles]
+             if not roles or user["role"] in roles]   # AnyRole is empty, so open
   return {"id": user["id"], "role": user["role"], "permissions": allowed}
 
 

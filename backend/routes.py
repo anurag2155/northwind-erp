@@ -1,34 +1,34 @@
-"""The route table. Every route in the system is defined exactly once, here.
+"""The route table: every route in the system is defined exactly once, here.
 
-Stage 4 flagged that adding the transfer route meant choosing between two files
-with no rule saying which: `server.py` held the write routes and `readmodel.py`
-appended the read ones, and `readmodel.me()` then had to `import server` lazily
-*inside the function* to read the live table back -- a circular import papered
-over with an import statement in an odd place.
-
-Splitting the table was the cause of all of that, so the table moved out of both
-modules into this one. What each module owns is now stateable in a sentence:
+Ownership, so that adding a route has one obvious home:
 
     erp.py        business rules and the only SQL
     readmodel.py  read-only projections, no routes
     routes.py     the (method, path, roles, status, handler) table -- this file
     server.py     HTTP transport: auth, matching, RBAC enforcement, CORS
 
-`GET /me` returns the caller's permitted routes off ROUTES itself, so the
-console holds no second copy of the RBAC rules and cannot offer a permission
-the API would refuse. It reads the table by argument now rather than by
-importing the server, which is why the circularity is gone rather than hidden.
+`GET /me` derives the caller's permitted routes from ROUTES, so the console
+holds no second copy of the RBAC rules and cannot offer a permission the API
+would refuse. The table is passed to `readmodel.me()` as an argument rather
+than imported back from the server, so there is no import cycle.
 
-Roles semantics, unchanged and load-bearing: an EMPTY role set means "any
-authenticated caller". Stage 4's Bug 3 was a route that got `ANY` by a
-copy-paste when it should have been `{"accountant"}` -- one token, and the
-finance ledger was world-readable to anyone with a token. `ANY` is spelled out
-as a named constant precisely so it reads as a deliberate choice.
+Roles: a set of role names gates the route; `ANY` (and only `ANY`) opens it to
+any authenticated caller. An empty set is rejected at import -- see AnyRole.
 """
 import erp
 import readmodel
 
-ANY = set()                              # authenticated, but not role-gated
+class AnyRole(frozenset):
+  """"Any authenticated caller", as a distinct type rather than a bare `set()`.
+
+  A plain empty set must never mean public: that reading is what made a
+  one-token typo publish the finance ledger. Only this type opens a route; an
+  empty set is a configuration error, enforced at import and in dispatch.
+  """
+  __slots__ = ()
+
+
+ANY = AnyRole()
 PO_ROLES = {"buyer", "purchasing_manager", "warehouse_clerk"}
 SO_ROLES = {"sales_rep", "warehouse_shipper"}
 
@@ -72,3 +72,12 @@ ROUTES = [
     ("GET", "/ledger/inventory-reconciliation", {"accountant"}, 200,
      lambda c, u, p, b: erp.Reports.reconcile(c)),
 ]
+
+
+for _method, _path, _roles, _status, _handler in ROUTES:
+  # Fail at import rather than quietly publishing a route.
+  if not isinstance(_roles, AnyRole) and not _roles:
+    raise RuntimeError("route %s %s has an empty role set; write ANY if it is "
+                       "meant to be open to any authenticated caller"
+                       % (_method, _path))
+del _method, _path, _roles, _status, _handler

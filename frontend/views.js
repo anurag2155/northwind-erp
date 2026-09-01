@@ -135,11 +135,9 @@ export function renderFinance(s) {
   else {
     const i1 = r.I1_gl_vs_movements, i2 = r.I2_position_vs_movements;
     const i3 = r.I3_entries_balanced, i4 = r.I4_po_received_vs_movements;
-    // Every invariant the endpoint reports gets a row. The table is built from
-    // the four the API is known to return rather than from Object.keys, so a
-    // renamed key shows up as a missing row in the console evidence run instead
-    // of silently vanishing -- but a NEW invariant must be added here too, and
-    // I4 was added in exactly this pass after the backend gained it.
+    // One row per invariant the endpoint reports. Listed explicitly rather than
+    // via Object.keys so a renamed key shows up as a missing row in the
+    // evidence run; a new invariant must be added here as well as server-side.
     ind = `<p class="recon ${r.ok ? "ok" : "bad"}"><strong>Ledger balance matches inventory ` +
       `movements: ${r.ok ? "YES" : "NO"}</strong></p>` + table(["Invariant", "Result", "Detail"], [
         ["I1 GL 1300 vs movement value", flag(i1.ok), `${money(i1.gl_inventory_cents)} vs ` +

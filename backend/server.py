@@ -68,8 +68,11 @@ def dispatch(user, method, path, body):   # unknown path 404; wrong role 403
     params = _match(spec, segments)
     if params is None:
       continue
-    if roles and user["role"] not in roles:
-      raise ApiError(403, "FORBIDDEN", role=user["role"], required=sorted(roles))
+    if not isinstance(roles, routes.AnyRole):
+      if not roles:      # belt and braces; routes.py refuses to import with one
+        raise ApiError(500, "ROUTE_MISCONFIGURED", method=method, path=path)
+      if user["role"] not in roles:
+        raise ApiError(403, "FORBIDDEN", role=user["role"], required=sorted(roles))
     if method == "GET":
       conn = erp.connect()
       try:

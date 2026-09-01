@@ -2,11 +2,10 @@
 The only module that touches the database; server.py is transport, proofs.py the
 suite. Design rationale is in NOTES.
 """
-import sqlite3, time, uuid
+import collections, sqlite3, time, uuid
 
 import os
-# ERP_DB lets the container mount the database on a volume; the default keeps
-# every local script and test working unchanged.
+# ERP_DB lets a container mount the database on a volume.
 DB_PATH = os.environ.get("ERP_DB", "/tmp/mini_erp.db")
 ACC_INVENTORY, ACC_GRNI, ACC_COGS, ACC_AR, ACC_REVENUE = "1300", "2100", "5000", "1100", "4000"
 SOD_THRESHOLD_CENTS = 100000
@@ -157,6 +156,12 @@ class Ledger:
                          "journal_lines WHERE account=?", account)["b"])
 
 
+# A position holds three quantities, so a change to one is a triple. Naming it
+# keeps `_apply` and `_move` to a single argument instead of three positional
+# floats whose order a caller can silently transpose.
+Delta = collections.namedtuple("Delta", "on_hand reserved value")
+
+
 class Inventory:                          # the only writer of positions/movements
   @staticmethod
   def _row(conn, sku, wh, create=False):
@@ -168,11 +173,18 @@ class Inventory:                          # the only writer of positions/movemen
     return row
 
   @staticmethod
-  def _commit(conn, row, on_hand, reserved, value_cents):   # CAS on `version`
+  def _apply(conn, row, delta):
+    """Add `delta` to one position. The only statement that writes `positions`.
+
+    Guarded by a compare-and-swap on `version`, which is inert under SQLite's
+    single writer lock and becomes the concurrency control on Postgres.
+    """
     if conn.execute("UPDATE positions SET on_hand=?, reserved=?, value_cents=?, "
                     "version=version+1 WHERE sku=? AND warehouse_id=? AND version=?",
-                    (on_hand, reserved, value_cents, row["sku"], row["warehouse_id"],
-                     row["version"])).rowcount != 1:
+                    (float(row["on_hand"]) + delta.on_hand,
+                     float(row["reserved"]) + delta.reserved,
+                     int(row["value_cents"]) + delta.value,
+                     row["sku"], row["warehouse_id"], row["version"])).rowcount != 1:
       raise ApiError(409, "POSITION_CONFLICT", sku=row["sku"])
 
   @staticmethod
@@ -185,38 +197,28 @@ class Inventory:                          # the only writer of positions/movemen
             "unit_cost_cents": int(value / on_hand) if on_hand else 0}
 
   @staticmethod
-  def _move(conn, row, kind, qty, value, journal_id, ref, reserved_delta=0.0):
-    """Move stock and value in or out of ONE position and append the movement.
+  def _move(conn, row, kind, delta, journal_id, ref):
+    """Apply `delta` and append the movement that records it. Signed: positive
+    moves stock in, negative out. Knows nothing about reservations, unit costs
+    or documents -- callers layer those rules on top.
 
-    Stage 4 wrote the transfer feature and found it could not reuse `issue`,
-    because `issue` meant both "stock leaves this position" and "a reservation
-    is being fulfilled". This is the first of those two, alone: `qty` and
-    `value` are signed, positive moves in, negative moves out, and it knows
-    nothing about reservations, unit costs or documents. `receive` layers
-    pricing on top, `issue` layers the reservation rule, `transfer` is two
-    calls with opposite signs.
-
-    `reserved_delta` is a parameter rather than a separate call because
-    `_commit` is a compare-and-swap on `version`: one row can only be written
-    once per transaction, so releasing a reservation has to travel with the
-    stock movement that fulfils it. The *rule* about when that is legal is the
-    caller's business, which is the part that was tangled before.
+    `delta.reserved` is part of the same triple rather than a separate call
+    because `_apply` is a CAS on `version`: a row is written once per
+    transaction, so a reservation release travels with the movement fulfilling
+    it. `reserve` calls `_apply` directly with no movement, which is the
+    schema-level rule that reservations move no value.
     """
-    Inventory._commit(conn, row, float(row["on_hand"]) + qty,
-                      float(row["reserved"]) + reserved_delta,
-                      int(row["value_cents"]) + value)
-    # Named columns. A Stage 2 column reorder broke a positional insert here,
-    # and Stage 4 still counted eight placeholders by hand to add the transfer
-    # rows -- adding a feature is where that cost is actually paid.
+    Inventory._apply(conn, row, delta)
     conn.execute("INSERT INTO stock_movements (id, sku, warehouse_id, kind, qty, "
                  "value_cents, journal_id, ref) VALUES (?,?,?,?,?,?,?,?)",
-                 (_id(), row["sku"], row["warehouse_id"], kind, qty, value, journal_id, ref))
+                 (_id(), row["sku"], row["warehouse_id"], kind,
+                  delta.on_hand, delta.value, journal_id, ref))
 
   @staticmethod
   def receive(conn, sku, wh, qty, unit_cost_cents, journal_id, ref):
     row = Inventory._row(conn, sku, wh, create=True)
     value = int(round(qty * unit_cost_cents))
-    Inventory._move(conn, row, "receipt", qty, value, journal_id, ref)
+    Inventory._move(conn, row, "receipt", Delta(qty, 0.0, value), journal_id, ref)
     return value
 
   @staticmethod
@@ -224,8 +226,7 @@ class Inventory:                          # the only writer of positions/movemen
     row = Inventory._row(conn, sku, wh, create=True)
     take = min(qty, max(float(row["on_hand"]) - float(row["reserved"]), 0.0))
     if take > 0:
-      Inventory._commit(conn, row, float(row["on_hand"]), float(row["reserved"]) + take,
-                        int(row["value_cents"]))
+      Inventory._apply(conn, row, Delta(0.0, take, 0))   # no movement: no value moved
     return take
 
   @staticmethod
@@ -242,7 +243,7 @@ class Inventory:                          # the only writer of positions/movemen
     on_hand, reserved = float(row["on_hand"]), float(row["reserved"])
     if qty > on_hand + EPS or qty > reserved + EPS:
       raise ApiError(409, "NOT_RESERVED", sku=sku, reserved=reserved)
-    Inventory._move(conn, row, "issue", -qty, -value, journal_id, ref, reserved_delta=-qty)
+    Inventory._move(conn, row, "issue", Delta(-qty, -qty, -value), journal_id, ref)
     return value
 
 
@@ -283,9 +284,11 @@ class Inventory:                          # the only writer of positions/movemen
     # Two _move calls with opposite signs. Stage 4 hand-wrote both sides of this
     # against the raw tables; now the pair is visibly a pair, and neither side
     # can drift from how receipts and issues maintain a position.
-    Inventory._move(conn, out, "issue", -qty, -value, journal_id, f"transfer:{dst}")
+    Inventory._move(conn, out, "issue", Delta(-qty, 0.0, -value),
+                    journal_id, f"transfer:{dst}")
     into = Inventory._row(conn, sku, dst, create=True)
-    Inventory._move(conn, into, "receipt", qty, value, journal_id, f"transfer:{src}")
+    Inventory._move(conn, into, "receipt", Delta(qty, 0.0, value),
+                    journal_id, f"transfer:{src}")
     return {"sku": sku, "from_warehouse_id": src, "to_warehouse_id": dst, "qty": qty,
             "value_cents": value, "journal_id": journal_id}
 

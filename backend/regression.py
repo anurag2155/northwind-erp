@@ -1,27 +1,18 @@
-"""Regression suite for Stage 4's three seeded bugs and the transfer feature.
+"""Regression suite for the three seeded bugs and the transfer feature.
 
     python3 regression.py <erp build> <routes build> [label]
     python3 regression.py erp.py routes.py FIXED
 
-Every scenario is run against BOTH the seeded build and the fixed build. A test
-that only passes on the fixed build proves nothing on its own -- it has to fail
-on the buggy one, or it is not testing the bug. The matrix in NOTES is the
-output of this file against each build.
+Every scenario runs against BOTH a seeded build and the fixed build. A test that
+only passes on the fixed build proves nothing -- it has to fail on the buggy one.
 
-Two things about the harness itself, both learned the hard way:
+Two harness rules that the scenarios depend on:
 
-1. It loads a build under its canonical module name via importlib instead of
-   copying it over the source tree. The previous version did
-   `shutil.copy(variant, "erp.py")`, which mutated the working tree and leaked
-   across invocations: running BUG2 and then BUG3 left `erp.py` as the bug-2
-   build, so the BUG3 run reported an R2 failure that belonged to the previous
-   command. A harness that can corrupt its own inputs cannot be trusted about
-   which build failed -- and that is the whole job of this file.
-
-2. Each scenario provisions the stock it needs and asserts on *deltas*, not on
-   absolute balances. The earlier version chained: R4 read the 10 units R2
-   happened to leave behind, so reordering or dropping a test silently changed
-   what the others meant.
+1. A build is imported under its canonical module name, never copied over the
+   source tree. Copying leaks between invocations and lets a run report a
+   failure that belongs to the previous command.
+2. Each scenario provisions its own stock and asserts on deltas, not absolute
+   balances, so run order cannot change what a test means.
 """
 import importlib.util, json, sys, threading, urllib.error, urllib.request
 from collections import Counter
@@ -166,12 +157,11 @@ def r2_partial_receipt(h):
 
 
 def r2b_i4_catches_it(h):
-  """The invariant that would have caught Bug 2 without a test looking for it.
+  """I4 must report a miscounted line without a test looking for the bug.
 
-  Bug 2 corrupted po_lines.qty_received while I1, I2 and I3 all stayed green,
-  because movements are driven by the received qty and never read the column.
-  I4 joins each line to the receipt movements carrying its id as `ref`, so a
-  miscounted line is reported by reconciliation itself.
+  Movements are driven by the received qty and never read qty_received, so
+  I1-I3 cannot see a corrupted column. I4 joins each line to the receipt
+  movements carrying its id as `ref`.
   """
   po = h.approved_po(10, sku="GIZMO")
   line_id = po["lines"][0]["id"]
@@ -291,15 +281,13 @@ def r4d_round_trip(h):
 
 
 def r5_concurrent_transfers(h):
-  """Stage 4 asserted the transfer's concurrency safety in a COMMENT and never
-  exercised it. Eight concurrent transfers, each of a third of the stock, so
-  exactly three can succeed: stock must be conserved across the winners and
-  reconciliation must still be clean. This is the test that comment stood in for.
+  """Eight concurrent transfers, each a third of the stock: exactly three win,
+  stock is conserved across the winners, reconciliation stays clean.
 
-  It also catches Bug 1, which was not the intent. On the deferred-BEGIN build
-  seven of the eight come back 500 OperationalError, because SQLite will not
-  upgrade a deferred read transaction to a writer once another has committed
-  underneath it, and busy_timeout deliberately does not retry that case.
+  Also catches bug 1, which was not the intent: on a deferred-BEGIN build most
+  attempts return 500 OperationalError, because SQLite will not promote a
+  deferred read transaction to a writer once another has committed underneath
+  it, and busy_timeout does not retry that case.
   """
   h.receive_stock(30, 100, sku="GIZMO", warehouse="WH-MAIN")
   src_before = h.position("GIZMO", "WH-MAIN")["on_hand"]
