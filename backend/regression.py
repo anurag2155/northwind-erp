@@ -292,9 +292,14 @@ def r4d_round_trip(h):
 
 def r5_concurrent_transfers(h):
   """Stage 4 asserted the transfer's concurrency safety in a COMMENT and never
-  exercised it. Eight concurrent transfers of 10 against 30 available units:
-  exactly three can succeed, stock must be conserved, and reconciliation must
-  still be clean. This is the test that comment was standing in for.
+  exercised it. Eight concurrent transfers, each of a third of the stock, so
+  exactly three can succeed: stock must be conserved across the winners and
+  reconciliation must still be clean. This is the test that comment stood in for.
+
+  It also catches Bug 1, which was not the intent. On the deferred-BEGIN build
+  seven of the eight come back 500 OperationalError, because SQLite will not
+  upgrade a deferred read transaction to a writer once another has committed
+  underneath it, and busy_timeout deliberately does not retry that case.
   """
   h.receive_stock(30, 100, sku="GIZMO", warehouse="WH-MAIN")
   src_before = h.position("GIZMO", "WH-MAIN")["on_hand"]
